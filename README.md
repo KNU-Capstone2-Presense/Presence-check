@@ -1,0 +1,64 @@
+# 최신 인증 흐름 (2026-11-25)
+
+- 관리자: 장소별 기준 사진을 여러 장 선택해 추가하거나 전체 교체한다(최대 10장). 기존 단일 기준과 과거 결과는 보존된다.
+- QR 발급 후 `QR 전체 화면`을 누른다. 닫기 또는 Esc로 복귀한다.
+- 학생: ID 입력 → 카메라 시작 → QR 인식 프레임 자동 전송 → 결과. 촬영·파일 선택·수동 인증 버튼은 없다. 재시도는 `다시 인증`으로 시작한다.
+- 표본 수집: `RTT 표본 수집`의 `QR 인식 후 수집 대기`로 스캔한다. 이 모드는 인증을 전송하지 않고 관리자 수집 명령을 기다린다.
+- 비교: QR 영역을 제외하고 모든 기준을 비교한다. Inlier 수와 비율을 모두 만족하는 기준이 있으면 일치. 통과 결과를 우선 선택하며 같은 등급에서는 두 기준 대비 충족 정도 중 낮은 값이 큰 결과를 대표로 선택한다. 통과 결과가 없고 비교 근거 부족 결과가 섞이면 판정 불가로 재촬영을 안내한다.
+- 상세: 선택된 기준 파일명과 비교한 장수, 수·비율 경계, 같은 높이의 매칭 그림을 표시한다. 최대 100개 선을 Inlier 우선으로 표시한다. 판정에는 전체 유효 매칭을 사용한다.
+- QR 제외는 노트북 화면·키보드 전체 제외와 다르다. 주변 배경을 충분히 담고 동일한 노트북을 다른 장소에서 촬영하는 대조 조건도 확인한다.
+- 과거 인증 결과·매칭 그림은 재계산하지 않는다. 변경된 비교 방식은 새 인증부터 적용된다.
+- 서버 재시작 후 PC와 휴대폰 페이지를 새로고침한다. QR는 세션 종료 전까지 유효하다.
+
+아래 이전 안내 중 수동 촬영, QR 데이터 붙여넣기, 유효 시간 설정 단계는 위 최신 흐름으로 대체한다.
+
+# AttendanceDemo
+
+최신 iPhone·외부 접속 실행 방법은 [DEMO_GUIDE.md](DEMO_GUIDE.md)를 따른다. HTTPS 서버(8443), 중계 입구(8766), 임시 공개 주소를 사용하는 구성이다. 아래 개발용 서버와 동시에 실행하지 않는다.
+
+학생용 인증 웹앱, 양방향 WebSocket 중계 프로그램, 관리자 서버 기반입니다. 장소 검증은 SIFT 기반으로 연결했으며 관리자 화면에서 기준 사진을 등록하면 사용할 수 있습니다. 가짜 판정이나 테스트 전용 화면을 넣지 않았습니다.
+
+## 관리자 서버
+실행 및 공동 개발 안내: `server/README.md`.
+```powershell
+cd C:\Users\User\AttendanceDemo
+.\.venv\Scripts\python.exe -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000 --ws-max-size 8388608 --no-proxy-headers
+```
+관리자 화면은 http://127.0.0.1:8000 입니다. QR 발급, 사진 수신, RTT 측정과 기록이 가능하며, 장소 검증 미연동 상태의 최종 판정은 추가 확인입니다.
+
+## 학생 앱
+```powershell
+cd C:\Users\User\AttendanceDemo\student-app
+npm.cmd install
+npm.cmd run dev
+```
+PC에서 http://localhost:5173 을 엽니다. 연결 설정에 실제 서버 또는 중계 프로그램 주소를 넣습니다. 학생 ID → QR 인식 → 주변 환경 촬영 → 인증하기 순서입니다. 사진 선택으로도 QR을 읽을 수 있고, QR 데이터 직접 입력은 연결 설정 안에 있습니다.
+
+휴대전화 카메라는 신뢰할 수 있는 HTTPS가 필요합니다. PC의 LAN IP에 HTTP로 접속하는 것만으로는 실시간 카메라를 사용할 수 없습니다. 휴대전화가 신뢰하는 인증서를 준비한 후 아래 환경변수로 Vite HTTPS를 켭니다. HTTPS 앱의 WebSocket도 wss 주소여야 합니다. 사진 선택 기능은 실시간 카메라 권한과 별개입니다.
+```powershell
+$env:TLS_CERT='C:\path\trusted-cert.pem'
+$env:TLS_KEY='C:\path\trusted-key.pem'
+npm.cmd run dev
+```
+
+## 중계 프로그램
+```powershell
+cd C:\Users\User\AttendanceDemo
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r relay-proxy\requirements.txt
+.\.venv\Scripts\python.exe relay-proxy\relay.py --upstream ws://127.0.0.1:8000/ws
+```
+학생 앱 연결 주소를 ws://127.0.0.1:8765 로 설정하면 프록시를 거칩니다. 휴대전화에서 사용할 때는 --host 0.0.0.0 과 PC의 LAN 주소를 사용하고, HTTPS 앱이라면 --cert / --key 옵션으로 TLS를 켜야 합니다. 방화벽에서는 시연 네트워크에 필요한 포트만 허용합니다.
+
+프록시는 인증 신호, 이미지, RTT 요청·응답을 해석하거나 대신 응답하지 않고 전달합니다. 연결당 서버 연결 하나를 만들며 한쪽이 끊기면 양쪽 연결을 종료합니다. RTT는 WebSocket ping/pong이 아니라 앱 메시지 rtt_probe/rtt_echo로 측정합니다. 인증 재전송을 방지하기 위해 자동 재연결은 하지 않으며 사용자가 다시 연결합니다.
+
+## 서버 연동
+shared/protocol.md를 따릅니다. 서버가 같은 연결에서 RTT를 측정하고 auth_result를 반환해야 전체 인증을 완료할 수 있습니다. 현재 입력한 학생 ID는 본인 인증 수단이 아닙니다. QR/사진 재사용 방지와 암호학적 학생 인증은 별도 범위입니다.
+
+## 확인
+```powershell
+cd student-app
+npm.cmd run build
+```
+실제 휴대전화·서버·프록시 환경의 RTT 표본을 확보한 다음 판정 기준을 설정합니다. 서버나 HTTPS 구성이 없으면 앱 화면과 사진 선택은 사용할 수 있지만 전체 인증은 완료되지 않습니다.
+
