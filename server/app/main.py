@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, Response
 from .auth import authenticate
 from .config import load_settings
-from .schemas import SessionCreate, PlaceRegistration, CalibrationSample
+from .schemas import SessionCreate, PlaceRegistration, CalibrationSample, CalibrationApply
 from .relay.calibration import calculate, apply as apply_calibration
 from .auth import decode_image
 from .place.service import register_place
@@ -103,8 +103,8 @@ def calibration_sample(payload: CalibrationSample, request: Request):
     return calibration(request)
 
 @app.post('/api/calibration/apply')
-def calibration_apply(request: Request):
-    try:return apply_calibration(request.app.state.store)
+def calibration_apply(payload: CalibrationApply, request: Request):
+    try:return apply_calibration(request.app.state.store,payload.threshold_ms)
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 @app.get('/api/sessions')
@@ -141,8 +141,8 @@ def close_session(session_id: UUID, request: Request):
     return {'status':'closed'}
 
 @app.get('/api/attempts')
-def attempts(request: Request):
-    return request.app.state.store.attempts()
+def attempts(request: Request, session_id: UUID | None = None):
+    return request.app.state.store.attempts(str(session_id) if session_id else None)
 
 @app.get('/api/attempts/{attempt_id}/image')
 def attempt_image(attempt_id: UUID, request: Request):
@@ -178,3 +178,19 @@ def matches(attempt_id: UUID, request: Request):
     path=request.app.state.settings.data_dir/'matches'/f'{attempt_id}.jpg'
     if not path.is_file():raise HTTPException(404,'매칭 이미지가 없습니다')
     return FileResponse(path,media_type='image/jpeg')
+
+@app.post('/api/sessions/{session_id}/clear')
+def clear_session_attempts(session_id: UUID, request: Request):
+    store=request.app.state.store
+    if not store.session(str(session_id)):raise HTTPException(404,'세션 없음')
+    store.clear_attempts(str(session_id))
+    return {'status':'cleared'}
+
+@app.post('/api/calibration/reset')
+async def reset_calibration(request: Request):
+    collections=request.app.state.collections
+    if any(r['status']=='running' for r in collections.runs.values()):
+        raise HTTPException(409,'반복 수집을 중지한 뒤 초기화하세요')
+    request.app.state.store.reset_samples()
+    collections.runs.clear()
+    return calibration(request)

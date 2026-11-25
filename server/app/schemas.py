@@ -62,3 +62,6 @@ class CollectionStart(BaseModel):
     label: Literal['direct','relay']
     count: int = Field(default=20,ge=1,le=10000)
     purpose: Literal['calibration','evaluation'] = 'calibration'
+
+class CalibrationApply(BaseModel):
+    threshold_ms: float = Field(ge=0, allow_inf_nan=False)

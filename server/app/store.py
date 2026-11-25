@@ -26,6 +26,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS runtime_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS collection_records (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, label TEXT NOT NULL, purpose TEXT NOT NULL, result TEXT NOT NULL);
             ''')
+            if 'hidden' not in {r[1] for r in db.execute('PRAGMA table_info(attempts)')}:
+                db.execute('ALTER TABLE attempts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0')
             db.execute("UPDATE attempts SET status='interrupted' WHERE status='processing'")
 
     @contextmanager
@@ -59,7 +61,7 @@ class Store:
     def reserve(self, attempt_id, session_id, student_id):
         try:
             with self.connection() as db:
-                db.execute('INSERT INTO attempts VALUES (?,?,?,?,?,NULL)',
+                db.execute('INSERT INTO attempts (attempt_id,session_id,student_id,created_at,status,result) VALUES (?,?,?,?,?,NULL)',
                            (attempt_id, session_id, student_id, now(), 'processing'))
             return True
         except sqlite3.IntegrityError:
@@ -70,9 +72,9 @@ class Store:
             db.execute('UPDATE attempts SET status=?,result=? WHERE attempt_id=?',
                        (status, json.dumps(result, ensure_ascii=False), attempt_id))
 
-    def attempts(self):
+    def attempts(self, session_id=None):
         with self.connection() as db:
-            rows = [dict(row) for row in db.execute('SELECT * FROM attempts ORDER BY created_at DESC LIMIT 100')]
+            rows = [dict(row) for row in db.execute('SELECT * FROM attempts WHERE hidden=0 AND (? IS NULL OR session_id=?) ORDER BY created_at DESC',(session_id,session_id))]
         for row in rows:
             row['result'] = json.loads(row['result']) if row['result'] else None
         return rows
@@ -114,3 +116,13 @@ class Store:
             rows=[dict(r) for r in db.execute('SELECT * FROM collection_records ORDER BY rowid DESC LIMIT 20000')]
         for r in rows:r['result']=json.loads(r['result'])
         return rows
+
+    def clear_attempts(self, session_id):
+        with self.connection() as db:
+            db.execute('UPDATE attempts SET hidden=1 WHERE session_id=?',(session_id,))
+
+    def reset_samples(self):
+        with self.connection() as db:
+            db.execute('DELETE FROM calibration_samples')
+            db.execute('DELETE FROM collection_records')
+            db.execute("DELETE FROM runtime_settings WHERE key='calibration'")
