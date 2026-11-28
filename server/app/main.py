@@ -65,7 +65,9 @@ async def collection_stop(run_id:str,request:Request):
 def evaluation(request:Request):
     active=request.app.state.store.active_calibration()
     records=request.app.state.store.collection_records()
-    rows=[r for r in records if r['purpose']=='evaluation' and active and r['result'].get('calibration_id')==active['id']]
+    # Match by threshold value, not calibration id: re-applying the same value creates a new id,
+    # but evaluations measured against that value still apply to it.
+    rows=[r for r in records if r['purpose']=='evaluation' and active and r['result'].get('threshold_ms')==active['threshold_ms']]
     def rate(label):
         values=[r for r in rows if r['label']==label]
         return dict(count=len(values),percent=100*sum(r['result']['status']=='suspected' for r in values)/len(values) if values else None)
