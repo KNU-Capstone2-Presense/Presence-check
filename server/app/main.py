@@ -32,7 +32,8 @@ app = FastAPI(title='AttendanceDemo 서버', version='0.1.0', lifespan=lifespan)
 async def local_admin(request: Request, call_next):
     # Administrator HTTP endpoints are restricted to this PC in the initial build.
     # /ws is the separate student endpoint and does not use this middleware.
-    public_student=request.url.path.startswith('/student/')
+    # '/student' itself must pass too, so the router can redirect it to '/student/'.
+    public_student=request.url.path=='/student' or request.url.path.startswith('/student/')
     if not public_student and (request.client is None or request.client.host not in ('127.0.0.1', '::1', 'testclient')):
         return JSONResponse({'detail':'관리자 화면은 서버 PC에서 접속하세요'}, status_code=403)
     if request.method not in ('GET','HEAD','OPTIONS') and request.headers.get('x-attendance-admin') != '1':
