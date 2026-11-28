@@ -91,7 +91,8 @@ class Store:
     def tag_sample(self, attempt_id, label):
         with self.connection() as db:
             if label == 'remove':
-                db.execute('DELETE FROM calibration_samples WHERE attempt_id=?',(attempt_id,))
+                if not db.execute('DELETE FROM calibration_samples WHERE attempt_id=?',(attempt_id,)).rowcount:
+                    raise ValueError('등록된 표본이 아닙니다')
                 return
             row=db.execute('SELECT status,result FROM attempts WHERE attempt_id=?',(attempt_id,)).fetchone()
             if not row or row['status']!='complete':raise ValueError('완료된 인증을 선택하세요')
