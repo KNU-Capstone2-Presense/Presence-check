@@ -8,15 +8,15 @@ class Collections:
         self.clients={}
         self.runs={}
 
-    def status(self):
-        return dict(clients=[dict(id=k,student_id=v['request'].student_id,busy=v['busy']) for k,v in self.clients.items()],runs=list(self.runs.values())[-20:])
+    def status(self, place_id):
+        return dict(clients=[dict(id=k,student_id=v['request'].student_id,busy=v['busy']) for k,v in self.clients.items() if v['request'].place_id==place_id],runs=[r for r in self.runs.values() if r['place_id']==place_id][-20:])
 
     def start(self, payload, store):
         client=self.clients.get(payload.client_id)
-        if not client or client['busy']:raise ValueError('대기 중인 학생 앱을 선택하세요')
-        active=store.active_calibration()
+        if not client or client['request'].place_id!=payload.place_id or client['busy']:raise ValueError('대기 중인 학생 앱을 선택하세요')
+        active=store.active_calibration(payload.place_id)
         if payload.purpose=='evaluation' and active is None:raise ValueError('임계값을 먼저 적용하세요')
-        run=dict(id=str(uuid4()),client_id=payload.client_id,label=payload.label,purpose=payload.purpose,
+        run=dict(place_id=payload.place_id,id=str(uuid4()),client_id=payload.client_id,label=payload.label,purpose=payload.purpose,
                  requested=payload.count,completed=0,status='running',stop=False,calibration_id=active['id'] if active else None)
         client['busy']=True;self.runs[run['id']]=run
         client['queue'].put_nowait((run,active))
@@ -49,7 +49,7 @@ class Collections:
                         record_id=str(uuid4())
                         result=await measure_rtt(ws,record_id,current)
                         result['calibration_id']=run['calibration_id']
-                        store.add_collection_record(record_id,run['id'],run['label'],run['purpose'],result)
+                        store.add_collection_record(record_id,run['id'],run['label'],run['purpose'],result,request.place_id)
                         run['completed']+=1
                         await ws.send_json(dict(type='collection_progress',completed=run['completed'],total=run['requested']))
                     run['status']='stopped' if run['stop'] else 'complete'

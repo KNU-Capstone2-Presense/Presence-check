@@ -26,9 +26,9 @@ function updateSampleOptions(){
  select.value=samples.some(s=>s.attempt_id===previous)?previous:'';
 }
 function showCalibration(data){
- calibrationState=data;const c=data.candidate,a=data.active;const fmt=n=>n==null?'—':n.toFixed(6);
+ calibrationState=data;const c=data.candidate,a=data.active;if(manualThreshold===null&&a)manualThreshold=a.threshold_ms;const fmt=n=>n==null?'—':n.toFixed(6);
  $('calibration-summary').textContent=`Direct ${c.direct_count}개 · Relay ${c.relay_count}개\n선택값: ${fmt(manualThreshold)} ms\n적용값: ${fmt(a?.threshold_ms)} ms`;
- if(manualThreshold===null&&a)manualThreshold=a.threshold_ms;$('apply-calibration').disabled=manualThreshold===null;updateAttemptOptions();updateSampleOptions();
+ $('apply-calibration').disabled=manualThreshold===null;updateAttemptOptions();updateSampleOptions();
 }
 async function tag(label,attempt_id=$('sample-attempt').value,empty='인증을 선택하세요'){try{if(!attempt_id)throw Error(empty);showCalibration(await api('/api/calibration/samples',{attempt_id,label}));$('calibration-message').textContent=label==='remove'?'표본 제외 완료':'표본 반영 완료'}catch(e){$('calibration-message').textContent=e.message}}
 $('tag-direct').onclick=()=>tag('direct');$('tag-relay').onclick=()=>tag('relay');$('untag').onclick=()=>tag('remove');
@@ -90,7 +90,7 @@ $('batch-chart').onpointerdown=e=>{$('batch-chart').setPointerCapture(e.pointerI
 $('batch-chart').onpointermove=e=>{if($('batch-chart').hasPointerCapture(e.pointerId))pickThreshold(e)};
 $('batch-chart').onpointerup=e=>{if($('batch-chart').hasPointerCapture(e.pointerId))$('batch-chart').releasePointerCapture(e.pointerId)};
 async function refreshBatch(){
- if(!calibrationBox.open&&!chartDialog.open)return;
+ if(!$('place').value||(!calibrationBox.open&&!chartDialog.open))return;
  try{
  const data=await api('/api/collection'),s=$('batch-client'),old=s.value;s.replaceChildren();for(const c of data.clients)s.append(new Option(c.student_id+(c.busy?' · 측정 중':''),c.id));if([...s.options].some(o=>o.value===old))s.value=old;
  const run=data.runs.find(r=>r.id===currentRun)||data.runs.at(-1);
@@ -99,13 +99,13 @@ async function refreshBatch(){
  const e=await api('/api/evaluation'),fmt=n=>n==null?'—':n.toFixed(1)+'%';$('evaluation-summary').textContent=`별도 평가: Direct ${e.direct.count}개 / FRR ${fmt(e.direct.percent)} · Relay ${e.relay.count}개 / 탐지율 ${fmt(e.relay.percent)}`;
  }catch(e){$('calibration-message').textContent=e.message}
 }
-$('batch-start').onclick=async()=>{try{const r=await api('/api/collection/start',{client_id:$('batch-client').value,label:$('batch-label').value,count:Number($('batch-count').value),purpose:$('batch-purpose').value});currentRun=r.id;await refreshBatch()}catch(e){$('calibration-message').textContent=e.message}};
+$('batch-start').onclick=async()=>{try{const r=await api('/api/collection/start',{place_id:$('place').value,client_id:$('batch-client').value,label:$('batch-label').value,count:Number($('batch-count').value),purpose:$('batch-purpose').value});currentRun=r.id;await refreshBatch()}catch(e){$('calibration-message').textContent=e.message}};
 $('batch-stop').onclick=async()=>{if(currentRun){await api('/api/collection/'+currentRun+'/stop',{});$('batch-progress').textContent='현재 표본 측정 후 중지'}};
 $('remove-collected').onclick=()=>tag('remove',$('remove-sample').value,'제외할 표본을 선택하세요');
 calibrationBox.addEventListener('toggle',refreshBatch);setInterval(refreshBatch,2000);
 
 $('reset-samples').onclick=async()=>{
- if(!confirm('Direct·Relay 표본, 별도 평가와 적용 임계값을 모두 초기화할까요? 인증 현황과 장소 이미지는 유지됩니다.'))return;
+ if(!confirm('선택한 장소의 Direct·Relay 표본, 별도 평가와 적용 임계값을 모두 초기화할까요? 인증 현황과 장소 이미지는 유지됩니다.'))return;
  try{
   const data=await api('/api/calibration/reset',{});
   manualThreshold=null;currentRun=null;showCalibration(data);drawSamples();
@@ -114,3 +114,10 @@ $('reset-samples').onclick=async()=>{
   $('calibration-message').textContent='표본 초기화 완료';
  }catch(e){$('calibration-message').textContent=e.message}
 };
+
+function resetPlaceCalibration(){
+ calibrationState=null;manualThreshold=null;currentRun=null;attemptOptionsStamp='';sampleOptionsStamp='';
+ $('calibration-summary').textContent='';$('calibration-message').textContent='';$('batch-progress').textContent='';$('batch-client').replaceChildren();$('evaluation-summary').textContent='';$('batch-stop').disabled=true;
+ $('apply-calibration').disabled=true;drawSamples();updateAttemptOptions();updateSampleOptions();
+ if($('place').value)api('/api/calibration').then(data=>{showCalibration(data);drawSamples()}).catch(e=>$('calibration-message').textContent=e.message);
+}
