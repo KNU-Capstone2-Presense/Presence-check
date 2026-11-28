@@ -32,7 +32,8 @@ app = FastAPI(title='AttendanceDemo 서버', version='0.1.0', lifespan=lifespan)
 async def local_admin(request: Request, call_next):
     # Administrator HTTP endpoints are restricted to this PC in the initial build.
     # /ws is the separate student endpoint and does not use this middleware.
-    public_student=request.url.path.startswith('/student/')
+    # '/student' itself must pass too, so the router can redirect it to '/student/'.
+    public_student=request.url.path=='/student' or request.url.path.startswith('/student/')
     if not public_student and (request.client is None or request.client.host not in ('127.0.0.1', '::1', 'testclient')):
         return JSONResponse({'detail':'관리자 화면은 서버 PC에서 접속하세요'}, status_code=403)
     if request.method not in ('GET','HEAD','OPTIONS') and request.headers.get('x-attendance-admin') != '1':
@@ -65,7 +66,9 @@ async def collection_stop(run_id:str,request:Request):
 def evaluation(request:Request):
     active=request.app.state.store.active_calibration()
     records=request.app.state.store.collection_records()
-    rows=[r for r in records if r['purpose']=='evaluation' and active and r['result'].get('calibration_id')==active['id']]
+    # Match by threshold value, not calibration id: re-applying the same value creates a new id,
+    # but evaluations measured against that value still apply to it.
+    rows=[r for r in records if r['purpose']=='evaluation' and active and r['result'].get('threshold_ms')==active['threshold_ms']]
     def rate(label):
         values=[r for r in rows if r['label']==label]
         return dict(count=len(values),percent=100*sum(r['result']['status']=='suspected' for r in values)/len(values) if values else None)
@@ -117,8 +120,8 @@ def create_session(payload: SessionCreate, request: Request):
     item = dict(session_id=str(uuid4()), place_id=payload.place_id.strip(),
                 token=secrets.token_urlsafe(24), created_at=now.isoformat(),
                 expires_at='')
-    request.app.state.store.create_session(item)
-    return qr_payload(item)
+    closed = request.app.state.store.create_session(item)
+    return dict(qr_payload(item), closed_sessions=closed)
 
 def qr_payload(item):
     return {key:item[key] for key in ('session_id','place_id','token')}
