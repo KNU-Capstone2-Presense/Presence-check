@@ -78,7 +78,7 @@ async def authenticate(ws, store, settings):
             except Exception:
                 log.exception('Place verification failed')
                 place = PlaceResult(status='inconclusive', decision='장소 판정 불가', reason='장소 검증 오류 또는 시간 초과')
-            # Recheck expiry/closure before any approval.
+            # Recheck closure (e.g. a newer QR for the same place) before any approval.
             valid_session(store, request)
             approved = place.status == 'match' and relay['status'] == 'within_bound'
             result = dict(type='auth_result', attempt_id=attempt_id,

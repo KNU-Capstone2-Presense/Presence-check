@@ -117,8 +117,8 @@ def create_session(payload: SessionCreate, request: Request):
     item = dict(session_id=str(uuid4()), place_id=payload.place_id.strip(),
                 token=secrets.token_urlsafe(24), created_at=now.isoformat(),
                 expires_at='')
-    request.app.state.store.create_session(item)
-    return qr_payload(item)
+    closed = request.app.state.store.create_session(item)
+    return dict(qr_payload(item), closed_sessions=closed)
 
 def qr_payload(item):
     return {key:item[key] for key in ('session_id','place_id','token')}

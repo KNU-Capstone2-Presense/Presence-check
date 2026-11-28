@@ -41,9 +41,14 @@ class Store:
             db.close()
 
     def create_session(self, item):
+        # A new QR replaces earlier QRs for the same place, so their tokens must stop working.
+        # Same transaction as the insert; returns how many earlier sessions were closed.
         with self.connection() as db:
+            closed = db.execute('UPDATE sessions SET active=0 WHERE place_id=? AND active=1',
+                                (item['place_id'],)).rowcount
             db.execute('INSERT INTO sessions VALUES (?,?,?,?,?,1)',
                        tuple(item[k] for k in ['session_id','place_id','token','created_at','expires_at']))
+        return closed
 
     def session(self, session_id):
         with self.connection() as db:

@@ -48,7 +48,7 @@ JSON 또는 아래 키를 query string으로 담은 URL입니다. QR에서 서�
 ## 관리자 서버 기반 구현
 - 관리자 화면: `http://127.0.0.1:8000/`
 - 학생 WebSocket: `ws://127.0.0.1:8000/ws`
-- 세션 생성: `POST /api/sessions` (place_id, duration_minutes)
+- 세션 생성: `POST /api/sessions` (place_id). 같은 place_id의 기존 활성 세션은 종료되며, 응답의 closed_sessions에 종료한 개수가 담깁니다.
 - QR PNG: `GET /api/sessions/{session_id}/qr`
 - 세션 종료: `POST /api/sessions/{session_id}/close`
 - 인증 결과 목록: `GET /api/attempts`
