@@ -47,8 +47,8 @@ student_dist=Path(__file__).resolve().parents[2]/'student-app'/'dist'
 app.mount('/student',StaticFiles(directory=str(student_dist),html=True,check_dir=False),name='student')
 
 @app.get('/api/collection')
-def collection_status(request:Request):
-    return request.app.state.collections.status()
+def collection_status(request:Request, place_id: str):
+    return request.app.state.collections.status(place_id)
 
 @app.post('/api/collection/start')
 async def collection_start(payload:CollectionStart,request:Request):
@@ -63,11 +63,10 @@ async def collection_stop(run_id:str,request:Request):
     return run
 
 @app.get('/api/evaluation')
-def evaluation(request:Request):
-    active=request.app.state.store.active_calibration()
-    records=request.app.state.store.collection_records()
-    # Match by threshold value, not calibration id: re-applying the same value creates a new id,
-    # but evaluations measured against that value still apply to it.
+def evaluation(request:Request, place_id: str):
+    active=request.app.state.store.active_calibration(place_id)
+    records=request.app.state.store.collection_records(place_id)
+    # Reuse evaluations at the same threshold, restricted to the selected place.
     rows=[r for r in records if r['purpose']=='evaluation' and active and r['result'].get('threshold_ms')==active['threshold_ms']]
     def rate(label):
         values=[r for r in rows if r['label']==label]
@@ -79,9 +78,9 @@ def admin():
     return FileResponse(Path(__file__).parent / 'static' / 'index.html')
 
 @app.get('/api/health')
-def health(request: Request):
+def health(request: Request, place_id: str = ""):
     s = request.app.state.settings
-    active = request.app.state.store.active_calibration()
+    active = request.app.state.store.active_calibration(place_id)
     return dict(status='ok', place_status='ready', rtt_samples=s.samples,
                 rtt_warmups=s.warmups, threshold_ms=active['threshold_ms'] if active else s.threshold_ms, statistic='median')
 
@@ -94,20 +93,20 @@ def admin_calibration_script():
     return FileResponse(Path(__file__).parent/'static'/'calibration.js',media_type='application/javascript')
 
 @app.get('/api/calibration')
-def calibration(request: Request):
+def calibration(request: Request, place_id: str):
     store=request.app.state.store
-    samples=store.calibration_samples()
-    return dict(samples=samples,candidate=calculate(samples),active=store.active_calibration())
+    samples=store.calibration_samples(place_id)
+    return dict(samples=samples,candidate=calculate(samples),active=store.active_calibration(place_id))
 
 @app.post('/api/calibration/samples')
-def calibration_sample(payload: CalibrationSample, request: Request):
-    try:request.app.state.store.tag_sample(str(payload.attempt_id),payload.label)
+def calibration_sample(payload: CalibrationSample, request: Request, place_id: str):
+    try:request.app.state.store.tag_sample(str(payload.attempt_id),payload.label,place_id)
     except ValueError as exc:raise HTTPException(400,str(exc))
-    return calibration(request)
+    return calibration(request,place_id)
 
 @app.post('/api/calibration/apply')
-def calibration_apply(payload: CalibrationApply, request: Request):
-    try:return apply_calibration(request.app.state.store,payload.threshold_ms)
+def calibration_apply(payload: CalibrationApply, request: Request, place_id: str):
+    try:return apply_calibration(request.app.state.store,payload.threshold_ms,place_id)
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 @app.get('/api/sessions')
@@ -120,6 +119,7 @@ def create_session(payload: SessionCreate, request: Request):
     item = dict(session_id=str(uuid4()), place_id=payload.place_id.strip(),
                 token=secrets.token_urlsafe(24), created_at=now.isoformat(),
                 expires_at='')
+    request.app.state.store.ensure_place(item['place_id'])
     closed = request.app.state.store.create_session(item)
     return dict(qr_payload(item), closed_sessions=closed)
 
@@ -162,13 +162,15 @@ async def student(ws: WebSocket):
 def create_place(payload: PlaceRegistration, request: Request):
     try:raw=decode_image(payload.image)
     except ValueError as exc:raise HTTPException(400,str(exc))
+    request.app.state.store.ensure_place(payload.place_id.strip())
     try:return register_place(request.app.state.settings.data_dir,payload,raw)
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 @app.get('/api/places')
 def places(request: Request):
     root=request.app.state.settings.data_dir/'places'
-    return [json.loads(p.read_text(encoding='utf-8')) for p in root.glob('*.json')]
+    metadata={v['place_id']:v for v in [json.loads(p.read_text(encoding='utf-8')) for p in root.glob('*.json')]}
+    return [dict(v,**{k:x for k,x in metadata.get(v['place_id'],{}).items() if k!='place_id'}) for v in request.app.state.store.places()]
 
 @app.get('/api/references/{reference_id}')
 def reference(reference_id: UUID, request: Request):
@@ -190,10 +192,16 @@ def clear_session_attempts(session_id: UUID, request: Request):
     return {'status':'cleared'}
 
 @app.post('/api/calibration/reset')
-async def reset_calibration(request: Request):
+async def reset_calibration(request: Request, place_id: str):
     collections=request.app.state.collections
-    if any(r['status']=='running' for r in collections.runs.values()):
+    if any(r['status']=='running' and r['place_id']==place_id for r in collections.runs.values()):
         raise HTTPException(409,'반복 수집을 중지한 뒤 초기화하세요')
-    request.app.state.store.reset_samples()
-    collections.runs.clear()
-    return calibration(request)
+    request.app.state.store.reset_samples(place_id)
+    collections.runs={k:v for k,v in collections.runs.items() if v['place_id']!=place_id}
+    return calibration(request,place_id)
+
+@app.post('/api/locations', status_code=201)
+def add_location(payload: SessionCreate, request: Request):
+    place_id=payload.place_id.strip()
+    request.app.state.store.ensure_place(place_id)
+    return {'place_id':place_id}

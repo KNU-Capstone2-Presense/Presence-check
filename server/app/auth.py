@@ -68,8 +68,8 @@ async def authenticate(ws, store, settings):
             image_path = store.images / f'{attempt_id}.jpg'
             await asyncio.to_thread(image_path.write_bytes, raw)
             await ws.send_json(dict(type='auth_received', attempt_id=attempt_id))
-            calibration = store.active_calibration()
-            current_settings = replace(settings, threshold_ms=calibration['threshold_ms']) if calibration else settings
+            calibration = store.active_calibration(request.place_id)
+            current_settings = replace(settings, threshold_ms=calibration['threshold_ms'] if calibration else None)
             relay = await measure_rtt(ws, attempt_id, current_settings)
             relay['calibration_id'] = calibration['id'] if calibration else None
             try:

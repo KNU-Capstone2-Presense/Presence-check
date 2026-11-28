@@ -9,8 +9,8 @@ def calculate(samples):
                 threshold_ms=None,detection_percent=None,frr_percent=None)
     return result
 
-def apply(store, threshold_ms):
-    samples=store.calibration_samples()
+def apply(store, threshold_ms, place_id):
+    samples=store.calibration_samples(place_id)
     value=calculate(samples)
     if not math.isfinite(threshold_ms) or threshold_ms<0:raise ValueError('유효한 임계값을 입력하세요')
     value.update(threshold_ms=threshold_ms,target_percent=None,method='manual')
@@ -18,5 +18,5 @@ def apply(store, threshold_ms):
         xs=[s['rtt_ms'] for s in samples if s['label']==label]
         value[key]=100*sum(x>threshold_ms for x in xs)/len(xs) if xs else None
     value.update(id=str(uuid4()),applied_at=now(),sample_ids=[s['attempt_id'] for s in samples])
-    store.save_calibration(value)
+    store.save_calibration(value,place_id)
     return value
