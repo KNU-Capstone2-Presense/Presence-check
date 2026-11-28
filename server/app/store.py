@@ -28,6 +28,10 @@ class Store:
             ''')
             if 'hidden' not in {r[1] for r in db.execute('PRAGMA table_info(attempts)')}:
                 db.execute('ALTER TABLE attempts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0')
+            db.execute('CREATE TABLE IF NOT EXISTS locations (place_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)')
+            for table in ('calibration_samples','collection_records'):
+                if 'place_id' not in {r[1] for r in db.execute('PRAGMA table_info('+table+')')}:
+                    db.execute('ALTER TABLE '+table+" ADD COLUMN place_id TEXT NOT NULL DEFAULT ''")
             db.execute("UPDATE attempts SET status='interrupted' WHERE status='processing'")
 
     @contextmanager
@@ -52,7 +56,7 @@ class Store:
 
     def sessions(self):
         with self.connection() as db:
-            return [dict(row) for row in db.execute('SELECT session_id,place_id,created_at,expires_at,active FROM sessions ORDER BY created_at DESC LIMIT 100')]
+            return [dict(row) for row in db.execute('SELECT session_id,place_id,created_at,expires_at,active FROM sessions ORDER BY created_at DESC')]
 
     def close_session(self, session_id):
         with self.connection() as db:
@@ -79,41 +83,41 @@ class Store:
             row['result'] = json.loads(row['result']) if row['result'] else None
         return rows
 
-    def calibration_samples(self):
+    def calibration_samples(self, place_id):
         with self.connection() as db:
-            return [dict(r) for r in db.execute('SELECT * FROM calibration_samples ORDER BY rowid')]
+            return [dict(r) for r in db.execute('SELECT * FROM calibration_samples WHERE place_id=? ORDER BY rowid',(place_id,))]
 
-    def tag_sample(self, attempt_id, label):
+    def tag_sample(self, attempt_id, label, place_id):
         with self.connection() as db:
             if label == 'remove':
-                db.execute('DELETE FROM calibration_samples WHERE attempt_id=?',(attempt_id,))
+                db.execute('DELETE FROM calibration_samples WHERE attempt_id=? AND place_id=?',(attempt_id,place_id))
                 return
-            row=db.execute('SELECT status,result FROM attempts WHERE attempt_id=?',(attempt_id,)).fetchone()
+            row=db.execute('SELECT a.status,a.result FROM attempts a JOIN sessions s ON a.session_id=s.session_id WHERE a.attempt_id=? AND s.place_id=?',(attempt_id,place_id)).fetchone()
             if not row or row['status']!='complete':raise ValueError('완료된 인증을 선택하세요')
             result=json.loads(row['result'])
             relay=result.get('relay',{})
             if relay.get('sample_count')!=10 or relay.get('statistic')!='median':raise ValueError('10회 중앙값 표본만 등록할 수 있습니다')
-            db.execute('INSERT INTO calibration_samples VALUES (?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET label=excluded.label,rtt_ms=excluded.rtt_ms',
-                       (attempt_id,label,relay['rtt_ms']))
+            db.execute('INSERT INTO calibration_samples (attempt_id,label,rtt_ms,place_id) VALUES (?,?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET label=excluded.label,rtt_ms=excluded.rtt_ms',
+                       (attempt_id,label,relay['rtt_ms'],place_id))
 
-    def active_calibration(self):
+    def active_calibration(self, place_id):
         with self.connection() as db:
-            row=db.execute("SELECT value FROM runtime_settings WHERE key='calibration'").fetchone()
+            row=db.execute("SELECT value FROM runtime_settings WHERE key=?",('calibration:'+place_id,)).fetchone()
             return json.loads(row['value']) if row else None
 
-    def save_calibration(self, value):
+    def save_calibration(self, value, place_id):
         with self.connection() as db:
-            db.execute("INSERT INTO runtime_settings VALUES ('calibration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(json.dumps(value),))
+            db.execute("INSERT INTO runtime_settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",('calibration:'+place_id,json.dumps(value)))
 
-    def add_collection_record(self, record_id, run_id, label, purpose, result):
+    def add_collection_record(self, record_id, run_id, label, purpose, result, place_id):
         with self.connection() as db:
-            db.execute('INSERT INTO collection_records VALUES (?,?,?,?,?)',(record_id,run_id,label,purpose,json.dumps(result)))
+            db.execute('INSERT INTO collection_records (id,run_id,label,purpose,result,place_id) VALUES (?,?,?,?,?,?)',(record_id,run_id,label,purpose,json.dumps(result),place_id))
             if purpose=='calibration':
-                db.execute('INSERT INTO calibration_samples VALUES (?,?,?)',(record_id,label,result['rtt_ms']))
+                db.execute('INSERT INTO calibration_samples (attempt_id,label,rtt_ms,place_id) VALUES (?,?,?,?)',(record_id,label,result['rtt_ms'],place_id))
 
-    def collection_records(self):
+    def collection_records(self, place_id):
         with self.connection() as db:
-            rows=[dict(r) for r in db.execute('SELECT * FROM collection_records ORDER BY rowid DESC LIMIT 20000')]
+            rows=[dict(r) for r in db.execute('SELECT * FROM collection_records WHERE place_id=? ORDER BY rowid DESC LIMIT 20000',(place_id,))]
         for r in rows:r['result']=json.loads(r['result'])
         return rows
 
@@ -121,8 +125,16 @@ class Store:
         with self.connection() as db:
             db.execute('UPDATE attempts SET hidden=1 WHERE session_id=?',(session_id,))
 
-    def reset_samples(self):
+    def reset_samples(self, place_id):
         with self.connection() as db:
-            db.execute('DELETE FROM calibration_samples')
-            db.execute('DELETE FROM collection_records')
-            db.execute("DELETE FROM runtime_settings WHERE key='calibration'")
+            db.execute('DELETE FROM calibration_samples WHERE place_id=?',(place_id,))
+            db.execute('DELETE FROM collection_records WHERE place_id=?',(place_id,))
+            db.execute("DELETE FROM runtime_settings WHERE key=?",('calibration:'+place_id,))
+
+    def ensure_place(self, place_id):
+        with self.connection() as db:
+            db.execute('INSERT OR IGNORE INTO locations VALUES (?,?)',(place_id,now()))
+
+    def places(self):
+        with self.connection() as db:
+            return [dict(r) for r in db.execute('SELECT * FROM locations ORDER BY created_at DESC')]

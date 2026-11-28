@@ -5,7 +5,7 @@ document.querySelector('#app')!.innerHTML = `<main>
 <header><div><span class="eyebrow">ATTENDANCE</span><h1>출석 인증</h1></div><span id="connection">미연결</span></header>
 <label for="student">학생 ID</label><input id="student" placeholder="학번" autocomplete="username" maxlength="80">
 <div class="camera"><span id="placeholder">QR과 주변을 촬영하세요</span><video id="video" autoplay muted playsinline hidden></video><img id="preview" alt="촬영 이미지" hidden></div>
-<p class="session">QR과 주변 공간이 함께 보이도록 비춰주세요</p><button id="camera" class="primary">카메라 시작 / 다시 인증</button><div id="session" class="session">QR 미인식</div><p id="status" role="status" aria-live="polite"></p><section id="result" hidden></section>
+<p class="session">QR과 배경을 맞춘 뒤 인증하기를 눌러주세요</p><button id="camera" class="primary">카메라 시작 / 다시 인증</button><button id="authenticate" class="primary" disabled>인증하기</button><div id="session" class="session">QR 미인식</div><p id="status" role="status" aria-live="polite"></p><section id="result" hidden></section>
 <details><summary>연결 설정</summary><label for="endpoint">서버 주소</label><input id="endpoint" placeholder="wss://서버주소/ws" spellcheck="false"><button id="connect" class="primary">연결</button></details>
 <details><summary>RTT 표본 수집</summary><button id="collect">QR 인식 후 수집 대기</button><button id="end-collect">대기 종료</button></details></main>`;
 const el = <T extends HTMLElement>(id:string) => document.getElementById(id) as T;
@@ -19,7 +19,7 @@ let collecting=false,openingCamera=false;
 let pending:string|null=null, timer:ReturnType<typeof setTimeout>|undefined, scanTimer:ReturnType<typeof setInterval>|undefined;
 student.value=localStorage.getItem('student_id')||''; endpoint.value=location.pathname.startsWith('/student/')?`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`:localStorage.getItem('endpoint')||'';
 function status(text:string,error=false){el('status').textContent=text;el('status').classList.toggle('error',error)}
-function ready(){el<HTMLButtonElement>('camera').disabled=!!pending||collecting||openingCamera;el<HTMLButtonElement>('collect').disabled=!!pending||collecting||openingCamera}
+function ready(){el<HTMLButtonElement>('camera').disabled=!!pending||collecting||openingCamera;el<HTMLButtonElement>('collect').disabled=!!pending||collecting||openingCamera;el<HTMLButtonElement>('authenticate').disabled=!!pending||collecting||openingCamera||!stream||!session||!student.value.trim()||socket?.readyState!==WebSocket.OPEN||scanPurpose!=='auth'}
 
 function parseQR(raw:string){
  try{
@@ -30,28 +30,36 @@ function parseQR(raw:string){
   el('session').textContent=`${q.place_id} · QR 인식 완료`;ready();return true;
  }catch{status('QR 형식을 확인하세요',true);return false}
 }
-function readQR(canvas:HTMLCanvasElement){
+function readQR(canvas:HTMLCanvasElement,submit=false){
  if(pending||collecting||socket?.readyState!==WebSocket.OPEN||!student.value.trim())return;
  const c=canvas.getContext('2d',{willReadFrequently:true})!,d=c.getImageData(0,0,canvas.width,canvas.height),qr=jsQR(d.data,d.width,d.height);
- if(!qr||!parseQR(qr.data))return;
+ if(!qr||!parseQR(qr.data)){session=null;qrPolygon=undefined;el('session').textContent='QR 미인식';ready();return false;}
  qrPolygon=[qr.location.topLeftCorner,qr.location.topRightCorner,qr.location.bottomRightCorner,qr.location.bottomLeftCorner].map(p=>[Math.max(0,Math.min(1,p.x/canvas.width)),Math.max(0,Math.min(1,p.y/canvas.height))]);
- setPicture(canvas);
- if(scanPurpose==='collection')beginCollection();else authenticate();
+ if(scanPurpose==='collection'){setPicture(canvas);beginCollection()}else if(submit){setPicture(canvas);authenticate()}else{status('구도를 확인한 뒤 인증하기를 누르세요');ready()}
+ return true;
 }
 
 function canvasOf(source:CanvasImageSource,w:number,h:number){const c=document.createElement('canvas');const ratio=Math.min(1,1600/Math.max(w,h));c.width=Math.round(w*ratio);c.height=Math.round(h*ratio);c.getContext('2d')!.drawImage(source,0,0,c.width,c.height);return c}
 function stopCamera(){if(scanTimer)clearInterval(scanTimer);stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;video.hidden=true}
-function setPicture(c:HTMLCanvasElement){picture=c.toDataURL('image/jpeg',.88);preview.src=picture;preview.hidden=false;el('placeholder').hidden=true;stopCamera();ready()}
+function setPicture(c:HTMLCanvasElement){document.querySelector<HTMLElement>('.camera')!.style.aspectRatio=`${c.width} / ${c.height}`;picture=c.toDataURL('image/jpeg',.88);preview.src=picture;preview.hidden=false;el('placeholder').hidden=true;stopCamera();ready()}
 async function startCamera(purpose:'auth'|'collection'){
  if(pending||collecting||openingCamera)return;
  if(!student.value.trim()){status('학생 ID를 입력하세요',true);student.focus();return}
  if(socket?.readyState!==WebSocket.OPEN){status('서버 연결을 확인하세요',true);return}
  openingCamera=true;ready();scanPurpose=purpose;session=null;picture='';el('session').textContent='QR 미인식';el('result').hidden=true;
- try{stopCamera();if(!navigator.mediaDevices)throw Error('HTTPS로 접속하세요');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});video.srcObject=stream;video.hidden=false;preview.hidden=true;el('placeholder').hidden=true;await video.play();
- scanTimer=setInterval(()=>{if(video.videoWidth)readQR(canvasOf(video,video.videoWidth,video.videoHeight))},400);status(purpose==='collection'?'QR 인식 후 표본 수집 대기':'QR 인식 시 자동 인증');
+ try{stopCamera();if(!navigator.mediaDevices)throw Error('HTTPS로 접속하세요');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});video.srcObject=stream;video.hidden=false;preview.hidden=true;el('placeholder').hidden=true;await video.play();syncCameraFrame();
+ scanTimer=setInterval(()=>{if(video.videoWidth)readQR(canvasOf(video,video.videoWidth,video.videoHeight))},400);status(purpose==='collection'?'QR 인식 후 표본 수집 대기':'QR과 배경을 맞춘 뒤 인증하기를 누르세요');
  }catch(e){status(e instanceof Error?e.message:'카메라를 열 수 없습니다',true)}finally{openingCamera=false;ready()}
 }
+function syncCameraFrame(){if(video.videoWidth&&video.videoHeight)document.querySelector<HTMLElement>('.camera')!.style.aspectRatio=`${video.videoWidth} / ${video.videoHeight}`}
+video.addEventListener('resize',syncCameraFrame);
 el('camera').onclick=()=>startCamera('auth');
+el('authenticate').onclick=()=>{
+ if(pending||collecting||openingCamera||!stream||socket?.readyState!==WebSocket.OPEN||!student.value.trim())return;
+ if(!video.videoWidth||!video.videoHeight){status('카메라 준비 중입니다',true);return}
+ const frame=canvasOf(video,video.videoWidth,video.videoHeight);
+ if(!readQR(frame,true))status('QR이 화면 안에서 선명하게 보이도록 맞춰주세요',true);
+};
 student.oninput=ready;
 function finish(){pending=null;if(timer)clearTimeout(timer);ready()}
 el('connect').onclick=()=>{

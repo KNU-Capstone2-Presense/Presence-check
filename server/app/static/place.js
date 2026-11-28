@@ -10,7 +10,7 @@ document.getElementById('register-place').onclick=async()=>{
  const button=document.getElementById('register-place');button.disabled=true;
  try{
   const files=[...$('ref-file').files];if(!files.length)throw Error('기준 사진을 선택하세요');if(files.length>10)throw Error('최대 10장까지 선택하세요');
-  const place=$('place').value.trim(),mode=$('ref-mode').value;
+  const place=$('place').value.trim(),mode=$('ref-mode').value;if(!place)throw Error('장소를 먼저 선택하세요');
   const places=await api('/api/places'),existing=places.find(p=>p.place_id===place);
   if(mode==='append'&&files.length+(existing?(existing.references?.length||1):0)>10)throw Error('장소당 최대 10장입니다. 전체 교체를 선택하거나 사진 수를 줄이세요');
   const prepared=[];
@@ -46,5 +46,5 @@ function updatePlaceDetail(a){
  $('match-view').parentElement.hidden=!p?.match_image_url;if(p?.match_image_url)$('match-view').src=p.match_image_url;
 }
 
-async function refreshReferences(){try{const all=await api('/api/places'),p=all.find(p=>p.place_id===$('place').value.trim());const refs=p?(p.references||[{reference_id:p.reference_id,label:'기존 기준'}]):[];$('ref-list').replaceChildren();const count=document.createElement('p');count.textContent=`등록 기준 ${refs.length}/10장`;$('ref-list').append(count);for(const ref of refs){const img=document.createElement('img');img.src='/api/references/'+ref.reference_id;img.alt=ref.label;img.title=ref.label;img.style.cssText='width:65px;height:65px;object-fit:cover;margin:3px;border-radius:5px';$('ref-list').append(img)}}catch(e){$('ref-status').textContent=e.message}}
+async function refreshReferences(){try{const all=await api('/api/places'),p=all.find(p=>p.place_id===$('place').value.trim());if(p?.thresholds){$('min-inliers').value=p.thresholds.min_inliers;$('min-ratio').value=p.thresholds.min_ratio}else{$('min-inliers').value=20;$('min-ratio').value=.4}const refs=p?(p.references||(p.reference_id?[{reference_id:p.reference_id,label:'기존 기준'}]:[])):[];$('ref-list').replaceChildren();const count=document.createElement('p');count.textContent=`등록 기준 ${refs.length}/10장`;$('ref-list').append(count);for(const ref of refs){const img=document.createElement('img');img.src='/api/references/'+ref.reference_id;img.alt=ref.label;img.title=ref.label;img.style.cssText='width:65px;height:65px;object-fit:cover;margin:3px;border-radius:5px';$('ref-list').append(img)}}catch(e){$('ref-status').textContent=e.message}}
 $('place').addEventListener('change',refreshReferences);registration.addEventListener('toggle',()=>{if(registration.open)refreshReferences()});refreshReferences();

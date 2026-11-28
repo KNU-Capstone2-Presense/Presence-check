@@ -58,6 +58,7 @@ class CollectionReady(BaseModel):
     student_id: str = Field(min_length=1,max_length=80)
 
 class CollectionStart(BaseModel):
+    place_id: str = Field(min_length=1,max_length=80)
     client_id: str
     label: Literal['direct','relay']
     count: int = Field(default=20,ge=1,le=10000)
