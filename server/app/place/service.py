@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import threading
+from collections import OrderedDict
 
 registration_lock=threading.RLock()
 from pathlib import Path
@@ -48,13 +49,16 @@ def verify_place(place_id: str, image_path: Path, qr_polygon=None) -> PlaceResul
     if not metadata.exists():return PlaceResult(status='inconclusive',decision='판정 불가',reason='기준 이미지 미등록')
     info=json.loads(metadata.read_text(encoding='utf-8'))
     references=info.get('references',[dict(reference_id=info['reference_id'],label='기준',thresholds=info['thresholds'])])
-    query=load_image(image_path);results=[];visuals=[]
+    # The query's QR mask and SIFT features are the same for every reference: compute them once.
+    query=load_image(image_path)
+    kp2,d2=cv2.SIFT_create(nfeatures=3000).detectAndCompute(cv2.cvtColor(query,cv2.COLOR_BGR2GRAY),feature_mask(query,qr_polygon))
+    results=[];matches=[]
     for ref in references:
         try:
-            result,visual=compare_reference(directory,ref,query,qr_polygon)
+            result,match=compare_reference(directory,ref,kp2,d2)
         except (ValueError,OSError,cv2.error):
-            result=PlaceResult(status='inconclusive',decision='판정 불가',reference_id=ref['reference_id'],reason='기준 이미지 비교 오류');visual=None
-        result.reference_label=ref.get('label','기준');results.append(result);visuals.append(visual)
+            result=PlaceResult(status='inconclusive',decision='판정 불가',reference_id=ref['reference_id'],reason='기준 이미지 비교 오류');match=None
+        result.reference_label=ref.get('label','기준');results.append(result);matches.append(match)
     if not results:return PlaceResult(status='inconclusive',decision='판정 불가',reason='기준 이미지 미등록')
     # A passing reference always wins; rank within the class by balanced threshold margin.
     def rank(r):
@@ -65,7 +69,12 @@ def verify_place(place_id: str, image_path: Path, qr_polygon=None) -> PlaceResul
     result.comparisons=[dict(reference_id=r.reference_id,label=r.reference_label,status=r.status,inlier_count=r.inlier_count,inlier_ratio=r.inlier_ratio,thresholds=r.thresholds) for r in results]
     if result.status!='match' and any(r.status=='inconclusive' for r in results):
         result.status='inconclusive';result.decision='판정 불가';result.reason='일치 기준 없음 · 일부 기준은 비교 근거 부족, 다른 각도로 재촬영하세요'
-    output=visuals[index]
+    # Draw only the selected comparison; the picture is display-only and never affects the decision.
+    output=None
+    if matches[index] is not None:
+        kp1,good,mask=matches[index]
+        try:output=draw_matches(load_image(directory/'places'/f"{references[index]['reference_id']}.jpg"),kp1,query,kp2,good,mask)
+        except (ValueError,OSError,cv2.error):output=None
     if output is not None:
         destination=directory/'matches';destination.mkdir(exist_ok=True)
         ok,buffer=cv2.imencode('.jpg',output)
@@ -81,11 +90,24 @@ def load_image(path):
     if max(h,w)>1600:image=cv2.resize(image,(round(w*1600/max(h,w)),round(h*1600/max(h,w))))
     return image
 
-def compare_reference(directory,info,query,qr_polygon):
-    ref=load_image(directory/'places'/f"{info['reference_id']}.jpg")
-    sift=cv2.SIFT_create(nfeatures=3000)
-    kp1,d1=sift.detectAndCompute(cv2.cvtColor(ref,cv2.COLOR_BGR2GRAY),feature_mask(ref))
-    kp2,d2=sift.detectAndCompute(cv2.cvtColor(query,cv2.COLOR_BGR2GRAY),feature_mask(query,qr_polygon))
+# Reference files are write-once (new uuid per registration), so their QR mask + SIFT features are reused
+# across attempts. mtime/size in the key catch a hand-replaced file; at most 32 entries (~2 MB each).
+reference_cache=OrderedDict();reference_cache_lock=threading.Lock()
+
+def reference_features(path):
+    stat=path.stat();key=(str(path),stat.st_mtime_ns,stat.st_size)
+    with reference_cache_lock:
+        if key in reference_cache:
+            reference_cache.move_to_end(key);return reference_cache[key]
+    image=load_image(path)
+    features=cv2.SIFT_create(nfeatures=3000).detectAndCompute(cv2.cvtColor(image,cv2.COLOR_BGR2GRAY),feature_mask(image))
+    with reference_cache_lock:
+        reference_cache[key]=features
+        while len(reference_cache)>32:reference_cache.popitem(last=False)
+    return features
+
+def compare_reference(directory,info,kp2,d2):
+    kp1,d1=reference_features(directory/'places'/f"{info['reference_id']}.jpg")
     t=info['thresholds']
     result=PlaceResult(status='inconclusive',decision='판정 불가',reference_id=info['reference_id'],
         thresholds=t,reference_keypoints=len(kp1),query_keypoints=len(kp2),valid_match_count=0,inlier_count=0)
@@ -114,6 +136,9 @@ def compare_reference(directory,info,query,qr_polygon):
                 result.status='match' if passed else 'non_match'
                 result.decision='장소 일치' if passed else '장소 불일치'
                 result.reason='Inlier 수·비율 기준 충족' if passed else 'Inlier 수 또는 비율 기준 미달'
+    return result,(kp1,good,mask)
+
+def draw_matches(ref,kp1,query,kp2,good,mask):
     # Display-only rescaling: analysis keypoints and thresholds remain untouched.
     height=600
     def display(image,keypoints):
@@ -127,4 +152,4 @@ def compare_reference(directory,info,query,qr_polygon):
     shown=[good[i] for i in order];flags=[mask[i] for i in order]
     output=cv2.drawMatches(left,lk,right,rk,shown,None,matchColor=(80,170,80),matchesMask=[int(v) for v in flags],flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
     if shown:output=cv2.drawMatches(left,lk,right,rk,shown,output,matchColor=(60,70,210),matchesMask=[int(not v) for v in flags],flags=cv2.DrawMatchesFlags_DRAW_OVER_OUTIMG|cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-    return result,output
+    return output
